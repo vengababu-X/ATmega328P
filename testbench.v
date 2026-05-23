@@ -1,16 +1,12 @@
 `timescale 1ns / 1ps
 
 module testbench;
-
-    // Inputs
     reg clk;
     reg reset;
-
-    // Outputs from the Top Module
     wire [7:0] portb_pins;
     wire uart_tx_pin;
 
-    // Instantiate the Top-Level Wrapper
+    // Instantiate Top-Level
     atmega328p_top uut (
         .clk(clk),
         .reset(reset),
@@ -18,29 +14,47 @@ module testbench;
         .uart_tx_pin(uart_tx_pin)
     );
 
-    // Clock Generation (50MHz)
+    // 50MHz Clock
     initial begin
         clk = 0;
         forever #10 clk = ~clk;
     end
 
-    // Simulation Sequence
+    // The Real-Time Visualizer
+    always @(portb_pins) begin
+        if (!reset) begin
+            $display("⏱️ Time: %0t ns | 🖥️ PC: %02h | 💡 LEDs: [%c %c %c %c %c %c %c %c]", 
+                $time, 
+                uut.core_pc,
+                portb_pins[7] ? "O" : ".",
+                portb_pins[6] ? "O" : ".",
+                portb_pins[5] ? "O" : ".",
+                portb_pins[4] ? "O" : ".",
+                portb_pins[3] ? "O" : ".",
+                portb_pins[2] ? "O" : ".",
+                portb_pins[1] ? "O" : ".",
+                portb_pins[0] ? "O" : "."
+            );
+        end
+    end
+
     initial begin
         $dumpfile("simulation.vcd");
         $dumpvars(0, testbench);
 
-        // 1. Initialize System
+        $display("========================================");
+        $display("🚀 BOOTING ATMEGA328P CUSTOM CORE v0.5");
+        $display("========================================");
+
         reset = 1;
-        
-        // 2. Release Reset
         #20 reset = 0;
 
-        // 3. Let the CPU run for a while to trigger loops and interrupts
-        #5000; 
-        
-        // 4. End Simulation
-        $display("Simulation Complete.");
+        // Run long enough to see the LED animation loop
+        #1500; 
+
+        $display("========================================");
+        $display("🛑 SIMULATION HALTED.");
+        $display("========================================");
         $finish;
     end
-
 endmodule
