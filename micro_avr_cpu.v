@@ -11,16 +11,20 @@ module micro_avr_cpu (
 );
 
     // --- INTERNAL MEMORY ARCHITECTURE ---
-    reg [7:0] registers [0:31];        // 32 General Purpose Registers
-    reg [15:0] prog_mem [0:127];       // Program Memory (ROM)
-    reg [7:0] sram [0:255];            // 256 bytes of Data Memory (RAM)
+    reg [7:0] registers [0:31];        
+    reg [15:0] prog_mem [0:127];       
+    reg [7:0] sram [0:255];            
     
     // --- CPU CONTROL REGISTERS ---
-    reg [15:0] pc;                     // Program Counter
-    reg [15:0] instruction;            // Current Instruction
-    reg [7:0] sreg;                    // Status Register (Bit 1: Zero, Bit 0: Carry)
-    reg [7:0] sp;                      // NEW: Stack Pointer
-    reg [8:0] alu_temp;                // ALU math buffer
+    reg [15:0] pc;                     
+    reg [15:0] instruction;            
+    reg [7:0] sreg;                    
+    reg [7:0] sp;                      
+    reg [8:0] alu_temp;                
+    
+    // --- NEW: HARDWARE TIMER PERIPHERAL ---
+    reg [7:0] tcnt0;                   // Timer Counter 0 (Runs independently)
+    reg timer_interrupt_flag;          // Flags the CPU when the timer overflows
     
     integer i;
 
@@ -30,21 +34,24 @@ module micro_avr_cpu (
         for (i = 0; i < 256; i = i + 1) sram[i] = 8'b00000000;
         for (i = 0; i < 128; i = i + 1) prog_mem[i] = 16'b0000000000000000;
         
-        // --- NEW TEST PROGRAM: SUBROUTINES ---
+        // --- NEW TEST PROGRAM: INTERRUPT VECTORS ---
         
-        // MAIN ROUTINE
-        prog_mem[0] = 16'h1005; // LDI R16, 0x05
-        prog_mem[1] = 16'h304D; // OUT UART, 'M' (Indicates Main routine started)
-        prog_mem[2] = 16'hA006; // CALL 0x06 (Jump to Subroutine at memory address 6)
-        prog_mem[3] = 16'h3052; // OUT UART, 'R' (Indicates successful Return!)
-        prog_mem[4] = 16'hF000; // HALT (Freeze CPU, program complete)
-        prog_mem[5] = 16'h0000; // NOP (Padding)
+        // 0x0000: RESET VECTOR (Jump to Main)
+        prog_mem[0] = 16'hC003; // RJMP 0x03 (Jump to PC=3)
         
-        // SUBROUTINE (Located at PC = 6)
-        prog_mem[6] = 16'h110A; // LDI R17, 0x0A (Load 10)
-        prog_mem[7] = 16'h5010; // ADD R16, R17 (5 + 10 = 15 / 0x0F)
-        prog_mem[8] = 16'h2000; // OUT GPIO, R16 (Push the math result 0x0F to pins)
-        prog_mem[9] = 16'hB000; // RET (Pop the return address from Stack and jump back)
+        // 0x0001: TIMER OVERFLOW INTERRUPT VECTOR
+        prog_mem[1] = 16'hC007; // RJMP 0x07 (Jump to ISR at PC=7)
+        prog_mem[2] = 16'h0000; // NOP
+        
+        // --- MAIN PROGRAM (Starts at PC=3) ---
+        prog_mem[3] = 16'h1001; // LDI R16, 0x01
+        prog_mem[4] = 16'h304D; // OUT UART, 'M' (Main Loop Running)
+        prog_mem[5] = 16'hC004; // RJMP 0x04 (Infinite loop back to PC=4)
+        prog_mem[6] = 16'h0000; // NOP
+        
+        // --- INTERRUPT SERVICE ROUTINE (Starts at PC=7) ---
+        prog_mem[7] = 16'h3049; // OUT UART, 'I' (Interrupt Triggered!)
+        prog_mem[8] = 16'hB000; // RET (Return from Interrupt to Main Loop)
     end
 
     // --- HARDWARE PIPELINE CYCLE ---
@@ -53,7 +60,10 @@ module micro_avr_cpu (
             pc <= 16'b0;
             instruction <= 16'b0;
             sreg <= 8'b0;
-            sp <= 8'hFF; // Initialize Stack Pointer to the very top of SRAM
+            sp <= 8'hFF; 
+            
+            tcnt0 <= 8'b0;
+            timer_interrupt_flag <= 1'b0;
             
             gpio_we <= 1'b0;
             gpio_wdata <= 8'b00000000;
@@ -64,71 +74,67 @@ module micro_avr_cpu (
             gpio_we <= 1'b0;
             uart_we <= 1'b0;
             
-            // --- STAGE 1: FETCH ---
-            instruction <= prog_mem[pc];
+            // --- BACKGROUND HARDWARE TIMER ---
+            tcnt0 <= tcnt0 + 8'd1;
+            if (tcnt0 == 8'hFF) begin
+                timer_interrupt_flag <= 1'b1; // Trigger interrupt on overflow
+            end
             
-            // Default PC increment
-            pc <= pc + 16'd1;
-            
-            // --- STAGE 2 & 3: DECODE & EXECUTE ---
-            case (instruction[15:12])
-                4'h1: registers[16 + instruction[11:8]] <= instruction[7:0]; // LDI
+            // --- INTERRUPT HANDLING ---
+            if (timer_interrupt_flag == 1'b1) begin
+                // Acknowledge and clear the flag
+                timer_interrupt_flag <= 1'b0;
                 
-                4'h2: begin // OUT GPIO
-                    gpio_wdata <= registers[16 + instruction[11:8]];
-                    gpio_we <= 1'b1;
-                end
+                // Push current PC to Stack (Context Save)
+                sram[sp]   <= pc & 16'h00FF;         
+                sram[sp-1] <= (pc >> 8) & 16'h00FF;  
+                sp <= sp - 8'd2;                     
                 
-                4'h3: begin // OUT UART
-                    uart_wdata <= instruction[7:0];
-                    uart_we <= 1'b1;
-                end
+                // Jump to Timer Interrupt Vector (PC = 1)
+                pc <= 16'h0001;
                 
-                4'h4: registers[16 + instruction[11:8]] <= timer_val; // IN Timer
+            end else begin
+                // --- NORMAL CPU PIPELINE ---
                 
-                4'h5: begin // ADD
-                    alu_temp = registers[16 + instruction[11:8]] + registers[16 + instruction[7:4]];
-                    registers[16 + instruction[11:8]] <= alu_temp[7:0];
-                    sreg[0] <= alu_temp[8]; 
-                    sreg[1] <= (alu_temp[7:0] == 8'b0) ? 1'b1 : 1'b0; 
-                end
+                instruction <= prog_mem[pc];
+                pc <= pc + 16'd1; // Default increment
                 
-                4'h6: begin // SUB
-                    alu_temp = registers[16 + instruction[11:8]] - registers[16 + instruction[7:4]];
-                    registers[16 + instruction[11:8]] <= alu_temp[7:0];
-                    sreg[1] <= (alu_temp[7:0] == 8'b0) ? 1'b1 : 1'b0; 
-                end
-                
-                4'h7: sram[instruction[7:0]] <= registers[16 + instruction[11:8]]; // STORE
-                
-                4'h8: registers[16 + instruction[11:8]] <= sram[instruction[7:0]]; // LOAD
-                
-                4'h9: begin // BREQ
-                    if (sreg[1] == 1'b1) pc <= pc + 16'd1 + instruction[7:0]; 
-                end
-                
-                4'hA: begin // NEW: CALL (Jump to Subroutine)
-                    // Push the return address (PC + 1) to the Stack
-                    sram[sp]   <= (pc + 16'd1) & 16'h00FF;         // Push Low Byte
-                    sram[sp-1] <= ((pc + 16'd1) >> 8) & 16'h00FF;  // Push High Byte
-                    sp <= sp - 8'd2;                               // Move Stack Pointer down
+                case (instruction[15:12])
+                    4'h1: registers[16 + instruction[11:8]] <= instruction[7:0]; // LDI
                     
-                    // Jump to the subroutine address
-                    pc <= {4'b0, instruction[11:0]}; 
-                end
-                
-                4'hB: begin // NEW: RET (Return from Subroutine)
-                    // Pop the return address from the Stack
-                    pc <= {sram[sp+1], sram[sp+2]};
-                    sp <= sp + 8'd2; // Restore Stack Pointer
-                end
-                
-                4'hF: pc <= pc; // NEW: HALT (Freeze the processor)
-                
-                default: ; // NOP
-            endcase
+                    4'h2: begin // OUT GPIO
+                        gpio_wdata <= registers[16 + instruction[11:8]];
+                        gpio_we <= 1'b1;
+                    end
+                    
+                    4'h3: begin // OUT UART
+                        uart_wdata <= instruction[7:0];
+                        uart_we <= 1'b1;
+                    end
+                    
+                    4'h5: begin // ADD
+                        alu_temp = registers[16 + instruction[11:8]] + registers[16 + instruction[7:4]];
+                        registers[16 + instruction[11:8]] <= alu_temp[7:0];
+                        sreg[0] <= alu_temp[8]; 
+                        sreg[1] <= (alu_temp[7:0] == 8'b0) ? 1'b1 : 1'b0; 
+                    end
+                    
+                    4'h7: sram[instruction[7:0]] <= registers[16 + instruction[11:8]]; // STORE
+                    4'h8: registers[16 + instruction[11:8]] <= sram[instruction[7:0]]; // LOAD
+                    
+                    4'hB: begin // RET / RETI (Return from Interrupt)
+                        pc <= {sram[sp+1], sram[sp+2]};
+                        sp <= sp + 8'd2; 
+                    end
+                    
+                    4'hC: begin // NEW: RJMP (Relative Jump for loops)
+                        pc <= instruction[11:0]; 
+                    end
+                    
+                    default: ; // NOP
+                endcase
+            end
         end
     end
 
 endmodule
-
