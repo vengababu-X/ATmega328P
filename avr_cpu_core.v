@@ -39,12 +39,12 @@ module avr_cpu_core (
                         pc <= pc + 16'd1;
                     end
                     
-                    4'h4: begin // NEW: LSL (Logical Shift Left)
+                    4'h4: begin // LSL (Logical Shift Left)
                         registers[16 + instruction[11:8]] <= registers[16 + instruction[11:8]] << 1;
                         pc <= pc + 16'd1;
                     end
 
-                    4'h9: begin // NEW: CPI (Compare Immediate)
+                    4'h9: begin // CPI (Compare Immediate)
                         if (registers[16 + instruction[11:8]] == instruction[7:0])
                             sreg_z <= 1'b1; // Set Zero Flag if match
                         else
@@ -52,11 +52,13 @@ module avr_cpu_core (
                         pc <= pc + 16'd1;
                     end
 
-                    4'hA: begin // NEW: BRNE (Branch if Not Equal / Zero flag is 0)
+                    4'hA: begin // BRNE (Branch if Not Equal / Zero flag is 0)
                         if (sreg_z == 1'b0) 
-                            pc <= pc + 16'd1 + instruction[7:0]; // Jump backwards/forwards
+                            // CORRECTED: Added Sign Extension {{8{instruction[7]}}, instruction[7:0]}
+                            // This allows the CPU to properly jump backwards with negative offsets
+                            pc <= pc + 16'd1 + {{8{instruction[7]}}, instruction[7:0]}; 
                         else 
-                            pc <= pc + 16'd1; // Do not jump, continue normally
+                            pc <= pc + 16'd1; 
                     end
                     
                     4'hC: pc <= {4'b0, instruction[11:0]}; // RJMP
