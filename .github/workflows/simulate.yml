@@ -14,10 +14,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y iverilog
           
-      - name: Compile Microcontroller Logic
+            - name: Compile Microcontroller Logic
         run: |
-          iverilog -o chip_sim testbench.v micro_avr_cpu.v gpio_port.v
-          
+          iverilog -o chip_sim testbench.v micro_avr_cpu.v gpio_port.v uart_tx.v timer.v
+concurrency: defaults:
+  
       - name: View Real-Time Output
         run: |
           vvp chip_sim
