@@ -1,17 +1,19 @@
-// gpio_port.v
-// Simulates a physical GPIO port (like PORTB on Arduino, where Pin 13 is an LED)
 module gpio_port (
-    input clk,
-    input reset,
-    input we,             // Write Enable from CPU
-    input [7:0] wdata,    // Data from CPU
-    output reg [7:0] pins // The physical pins on the outside of the DIP chip
+    input wire clk,
+    input wire reset,
+    input wire [7:0] bus_addr,
+    input wire [7:0] bus_wdata,
+    input wire bus_we,
+    output reg [7:0] pin_state
 );
     always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            pins <= 8'b00000000;
-        end else if (we) begin
-            pins <= wdata;
+        if (reset == 1'b1) begin
+            pin_state <= 8'b00000000;
+        end else begin
+            // Address 0x25 simulates PORTB memory mapping
+            if (bus_we == 1'b1 && bus_addr == 8'h25) begin
+                pin_state <= bus_wdata;
+            end
         end
     end
 endmodule
