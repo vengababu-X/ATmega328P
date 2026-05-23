@@ -1,23 +1,25 @@
-name: Arduino Microcontroller RTL Simulation
-on: [push]
+name: VLSI Simulation Pipeline
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
 
 jobs:
-  simulate-chip:
+  simulate:
     runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
 
-      - name: Install Icarus Verilog
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y iverilog
-          
-      - name: Compile Microcontroller Logic
-        run: |
-          iverilog -o chip_sim testbench.v micro_avr_cpu.v gpio_port.v uart_tx.v timer.v
-          
-      - name: View Real-Time Output
-        run: |
-          vvp chip_sim
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Install Icarus Verilog
+      run: sudo apt-get update && sudo apt-get install -y iverilog
+
+    - name: Compile All Modules
+      # The *.v command ensures the core, top, memory, peripherals, and testbench are all linked
+      run: iverilog -o simulation.vvp *.v
+
+    - name: Run Simulation
+      run: vvp simulation.vvp
